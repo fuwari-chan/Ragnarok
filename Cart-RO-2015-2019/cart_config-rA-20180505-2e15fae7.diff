@@ -1,0 +1,752 @@
+ conf/carts.yml     | 103 ++++++++++++++++++++++
+ src/common/mmo.h   |   2 +-
+ src/map/battle.cpp |   2 +-
+ src/map/clif.cpp   |  56 ++++++------
+ src/map/clif.hpp   |   2 +-
+ src/map/map.cpp    | 248 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/map/map.hpp    |  28 ++++++
+ src/map/pc.cpp     |  16 ++--
+ src/map/pc.hpp     |   5 +-
+ src/map/skill.cpp  |  11 +--
+ src/map/status.cpp |   8 +-
+ 11 files changed, 434 insertions(+), 47 deletions(-)
+
+diff --git a/conf/carts.yml b/conf/carts.yml
+new file mode 100644
+index 0000000..c3a6ed9
+--- /dev/null
++++ b/conf/carts.yml
+@@ -0,0 +1,103 @@
++# New cart configs by MC_CHANGECART also include MC_CARTDECORATE
++# WARNING: ONLY PACKETVER >= 20150826
++# @author [Cydh]
++
++Capacity:
++- Type: 1
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 2
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 3
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 4
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 5
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 6
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 7
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 8
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 9
++  MaxItems: 100
++  MaxWeight: 8000
++- Type: 10
++  MaxItems: 150
++  MaxWeight: 8000
++- Type: 11
++  MaxItems: 150
++  MaxWeight: 10000
++- Type: 12
++  MaxItems: 150
++  MaxWeight: 12000
++
++ChangeCart:
++- Skill: MC_CHANGECART
++  Carts:
++  - Type: 1
++    MinLevel: 1
++  - Type: 2
++    MinLevel: 40
++  - Type: 3
++    MinLevel: 65
++  - Type: 4
++    MinLevel: 80
++  - Type: 5
++    MinLevel: 90
++  - Type: 6
++    MinLevel: 100
++  - Type: 7
++    MinLevel: 110
++  - Type: 8
++    MinLevel: 120
++  - Type: 9
++    MinLevel: 130
++  #- Type: 10
++  #  MinLevel: 1
++  #- Type: 11
++  #  MinLevel: 1
++  #- Type: 12
++  #  MinLevel: 1
++- Skill: MC_CARTDECORATE
++  Carts:
++  - Type: 1
++    MinLevel: 1
++  - Type: 2
++    MinLevel: 1
++  - Type: 3
++    MinLevel: 1
++  - Type: 4
++    MinLevel: 1
++  - Type: 5
++    MinLevel: 1
++  - Type: 6
++    MinLevel: 1
++  - Type: 7
++    MinLevel: 1
++  - Type: 8
++    MinLevel: 1
++  - Type: 9
++    MinLevel: 1
++  - Type: 10
++    MinLevel: 1
++  - Type: 11
++    MinLevel: 1
++  - Type: 12
++    MinLevel: 1
++    # To exclude job to use this cart type
++    #JobExcept:
++    #- JOB_MERCHANT
++    #- JOB_BLACKSMITH
++    #- JOB_ALCHEMIST
++    #- JOB_BABY_MERCHANT
++    #- JOB_BABY_BLACKSMITH
++    #- JOB_BABY_ALCHEMIST
+diff --git a/src/common/mmo.h b/src/common/mmo.h
+index 3218f0d..16d0dbb 100644
+--- a/src/common/mmo.h
++++ b/src/common/mmo.h
+@@ -50,7 +50,7 @@
+ #define MAX_ZENY INT_MAX ///Max zeny
+ #define MAX_BANK_ZENY SINT32_MAX ///Max zeny in Bank
+ #define MAX_FAME 1000000000 ///Max fame points
+-#define MAX_CART 100 ///Maximum item in cart
++#define MAX_CART 150 ///Maximum item in cart
+ #define MAX_SKILL 1200 ///Maximum skill can be hold by Player, Homunculus, & Mercenary (skill list) AND skill_db limit
+ #define DEFAULT_WALK_SPEED 150 ///Default walk speed
+ #define MIN_WALK_SPEED 20 ///Min walk speed
+diff --git a/src/map/battle.cpp b/src/map/battle.cpp
+index 0e98b4b..a0f92b5 100644
+--- a/src/map/battle.cpp
++++ b/src/map/battle.cpp
+@@ -3528,7 +3528,7 @@ static int battle_calc_attack_skill_ratio(struct Damage wd, struct block_list *s
+ 		case MC_CARTREVOLUTION:
+ 			skillratio += 50;
+ 			if(sd && sd->cart_weight)
+-				skillratio += 100 * sd->cart_weight / sd->cart_weight_max; // +1% every 1% weight
++				skillratio += 100 * sd->cart_weight / map_cart_max_weight(sd); // +1% every 1% weight
+ 			else if (!sd)
+ 				skillratio += 100; //Max damage for non players.
+ 			break;
+diff --git a/src/map/clif.cpp b/src/map/clif.cpp
+index 87799f3..a8f592e 100644
+--- a/src/map/clif.cpp
++++ b/src/map/clif.cpp
+@@ -3376,7 +3376,7 @@ void clif_updatestatus(struct map_session_data *sd,int type)
+ 	case SP_CARTINFO:
+ 		WFIFOW(fd,0)=0x121;
+ 		WFIFOW(fd,2)=sd->cart_num;
+-		WFIFOW(fd,4)=MAX_CART;
++		WFIFOW(fd,4)=sd->cart_num_max;
+ 		WFIFOL(fd,6)=sd->cart_weight;
+ 		WFIFOL(fd,10)=sd->cart_weight_max;
+ 		len=14;
+@@ -11908,20 +11908,20 @@ void clif_parse_RemoveOption(int fd,struct map_session_data *sd)
+ 
+ /// Request to select cart's visual look for new cart design (ZC_SELECTCART).
+ /// 097f <Length>.W <identity>.L <type>.B
+-void clif_SelectCart(struct map_session_data *sd) {
++void clif_SelectCart(struct map_session_data *sd, uint16 skill_id) {
+ #if PACKETVER >= 20150826
+-	int i = 0, carts = 3;
++	int i = 0, carts = MAX_CARTS;
++	unsigned char *buf;
+ 
+ 	int fd = sd->fd;
+-	WFIFOHEAD(fd,8 + carts);
+-	WFIFOW(fd,0) = 0x97f;
+-	WFIFOW(fd,2) = 8 + carts;
+-	WFIFOL(fd,4) = sd->status.account_id;
+-	// Right now we have 10-12, tested it you can also enable selection for all cart styles here(1-12)
+-	for( i = 0; i < carts; i++ ) {
+-	WFIFOB(fd,8 + i) = 10 + i;
+-	}
+-	WFIFOSET(fd,8 + carts);
++	sd->changecart_skill = skill_id;
++	CREATE(buf, unsigned char, 8 + MAX_CARTS);
++	WBUFW(buf, 0) = 0x97f;
++	WBUFL(buf, 4) = sd->status.account_id;
++	i = map_cart_avail(sd, sd->changecart_skill, buf, 8);
++	WBUFW(buf, 2) = 8 + i;
++	clif_send(buf, WBUFW(buf, 2), &sd->bl, SELF);
++	aFree(buf);
+ #endif
+ }
+ 
+@@ -11930,19 +11930,22 @@ void clif_SelectCart(struct map_session_data *sd) {
+ /// 0980 <identity>.L <type>.B
+ void clif_parse_SelectCart(int fd,struct map_session_data *sd) {
+ #if PACKETVER >= 20150826
+-	int type;
++	int type, error;
+ 
+ 	// Check identity
+-	if( !sd || pc_checkskill(sd,MC_CARTDECORATE) < 1 || RFIFOL(fd,2) != sd->status.account_id )
+-	return;
++	if( !sd || !sd->changecart_skill || pc_checkskill(sd, sd->changecart_skill) < 1 || RFIFOL(fd,2) != sd->status.account_id )
++		return;
+ 
+ 	type = (int)RFIFOB(fd,6);
+ 
+ 	// Check type
+-	if( type < 10 || type > MAX_CARTS ) 
++	if ((error = map_cart_check_type(sd, sd->changecart_skill, type)) != 0) {
++		ShowError("clif_parse_SelectCart: Error %d. AID: %d. Type %d ", error, RFIFOL(fd, 2), type);
+ 		return;
++	}
+ 
+ 	pc_setcart(sd, type);
++	sd->changecart_skill = 0;
+ #endif
+ }
+ 
+@@ -11951,7 +11954,7 @@ void clif_parse_SelectCart(int fd,struct map_session_data *sd) {
+ /// 01af <num>.W
+ void clif_parse_ChangeCart(int fd,struct map_session_data *sd)
+ {// TODO: State tracking?
+-	int type;
++	int type, error;
+ 
+ 	if( !sd || pc_checkskill(sd, MC_CHANGECART) < 1 )
+ 		return;
+@@ -11965,19 +11968,12 @@ void clif_parse_ChangeCart(int fd,struct map_session_data *sd)
+ 
+ 	type = (int)RFIFOW(fd,packet_db[RFIFOW(fd,0)].pos[0]);
+ 
+-	if( 
+-#ifdef NEW_CARTS
+-		(type == 9 && sd->status.base_level > 130) ||
+-		(type == 8 && sd->status.base_level > 120) ||
+-		(type == 7 && sd->status.base_level > 110) ||
+-		(type == 6 && sd->status.base_level > 100) ||
+-#endif
+-		(type == 5 && sd->status.base_level > 90) ||
+-	    (type == 4 && sd->status.base_level > 80) ||
+-	    (type == 3 && sd->status.base_level > 65) ||
+-	    (type == 2 && sd->status.base_level > 40) ||
+-	    (type == 1))
+-		pc_setcart(sd, type);
++	if ((error = map_cart_check_type(sd, MC_CHANGECART, type)) != 0) {
++		ShowError("clif_parse_ChangeCart: Error %d. AID: %d. Type %d ", error, RFIFOL(fd, 2), type);
++		return;
++	}
++
++	pc_setcart(sd, type);
+ }
+ 
+ 
+diff --git a/src/map/clif.hpp b/src/map/clif.hpp
+index f5c69d6..5d5ae8f 100644
+--- a/src/map/clif.hpp
++++ b/src/map/clif.hpp
+@@ -1068,7 +1068,7 @@ void clif_broadcast_obtain_special_item(const char *char_name, unsigned short na
+ 
+ void clif_dressing_room(struct map_session_data *sd, int flag);
+ void clif_navigateTo(struct map_session_data *sd, const char* mapname, uint16 x, uint16 y, uint8 flag, bool hideWindow, uint16 mob_id );
+-void clif_SelectCart(struct map_session_data *sd);
++void clif_SelectCart(struct map_session_data *sd, uint16 skill_id);
+ 
+ /// Achievement System
+ void clif_achievement_list_all(struct map_session_data *sd);
+diff --git a/src/map/map.cpp b/src/map/map.cpp
+index a18ff35..dc0e15e 100644
+--- a/src/map/map.cpp
++++ b/src/map/map.cpp
+@@ -5,6 +5,8 @@
+ 
+ #include <stdlib.h>
+ #include <math.h>
++#include <string.h>
++#include <yaml-cpp/yaml.h>
+ 
+ #include "../common/cbasetypes.h"
+ #include "../common/core.h"
+@@ -104,6 +106,10 @@ static DBMap* charid_db=NULL; /// uint32 char_id -> struct map_session_data*
+ static DBMap* regen_db=NULL; /// int id -> struct block_list* (status_natural_heal processing)
+ static DBMap* map_msg_db=NULL;
+ 
++std::string cart_conf = "conf/carts.yml";
++std::unordered_map <int, s_cart_config_capacity> CartCapacityConfig; // type -> data
++std::unordered_map <int, s_cart_config_available> CartAvailableConfig; // skill_id -> data
++
+ static int map_users=0;
+ 
+ #define BLOCK_SIZE 8
+@@ -3872,6 +3878,8 @@ int map_config_read(const char *cfgName)
+ 			strcpy(charhelp_txt, w2);
+ 		else if (strcmpi(w1, "channel_conf") == 0)
+ 			safestrncpy(channel_conf, w2, sizeof(channel_conf));
++		else if (strcmpi(w1, "cart_conf") == 0)
++			cart_conf = cart_conf;
+ 		else if(strcmpi(w1,"db_path") == 0)
+ 			safestrncpy(db_path,w2,ARRAYLENGTH(db_path));
+ 		else if (strcmpi(w1, "console") == 0) {
+@@ -4293,6 +4301,243 @@ int cleanup_sub(struct block_list *bl, va_list ap)
+ 	return 1;
+ }
+ 
++/* Get max weight for player's cart
++* @param sd Player
++* @return Max weight or battle_config.max_cart_weight if not defined
++*/
++unsigned int map_cart_max_weight(struct map_session_data *sd) {
++	int type = 0;
++	if (!sd || !CartCapacityConfig.size())
++		return battle_config.max_cart_weight;
++#ifdef NEW_CARTS
++	if (&sd->sc && sd->sc.data[SC_PUSH_CART])
++		type = sd->sc.data[SC_PUSH_CART]->val1;
++#else
++	if (&sd->sc && sd->sc.option&OPTION_CART) {
++		if (sd->sc.option&OPTION_CART1)
++			type = 1;
++		else if (sd->sc.option&OPTION_CART2)
++			type = 2;
++		else if (sd->sc.option&OPTION_CART3)
++			type = 3;
++		else if (sd->sc.option&OPTION_CART4)
++			type = 4;
++		else if (sd->sc.option&OPTION_CART5)
++			type = 5;
++	}
++#endif
++	return map_cart_max_weight2(type);
++}
++
++/* Get max weight of item for cart type
++* @param type Player
++* @return Max weight or battle_config.max_cart_weight if not defined
++*/
++unsigned int map_cart_max_weight2(int type) {
++	if (type && CartCapacityConfig.size()) {
++		auto data = CartCapacityConfig.find(type);
++		if (data != CartCapacityConfig.end())
++			return data->second.max_weight;
++	}
++	return battle_config.max_cart_weight;
++}
++
++/* Get max numbers of item for player's cart
++* @param sd Player
++* @return Max number or MAX_CART if not defined
++*/
++unsigned short map_cart_max_items(struct map_session_data *sd) {
++	int type = 0;
++	if (!sd || !CartCapacityConfig.size())
++		return MAX_CART;
++#ifdef NEW_CARTS
++	if (&sd->sc && sd->sc.data[SC_PUSH_CART])
++		type = sd->sc.data[SC_PUSH_CART]->val1;
++#else
++	if (&sd->sc && sd->sc.option&OPTION_CART) {
++		if (sd->sc.option&OPTION_CART1)
++			type = 1;
++		else if (sd->sc.option&OPTION_CART2)
++			type = 2;
++		else if (sd->sc.option&OPTION_CART3)
++			type = 3;
++		else if (sd->sc.option&OPTION_CART4)
++			type = 4;
++		else if (sd->sc.option&OPTION_CART5)
++			type = 5;
++	}
++#endif
++	return map_cart_max_items2(type);
++}
++
++/* Get max numbers of item for cart type
++* @param type Player
++* @return Max number or MAX_CART if not defined
++*/
++unsigned short map_cart_max_items2(int type) {
++	if (type && CartCapacityConfig.size()) {
++		auto data = CartCapacityConfig.find(type);
++		if (data != CartCapacityConfig.end())
++			return data->second.max_items;
++	}
++	return MAX_CART;
++}
++
++/* Check if cart config was set to force MC_CHANGECART use clif_SelectCart [Cydh]
++* @return True if set, false otherwise
++*/
++bool map_cart_type_is_enabled(void) {
++#if PACKETVER >= 20150826
++	return (CartAvailableConfig.size() > 0);
++#else
++	return false;
++#endif
++}
++
++/* List available carts for player by clif_SelectCart (this 097f has power to bypass client level check!) [Cydh]
++* @param sd Player
++* @param skill_id Used Skill ID
++* @param buf Clif's buffer to send available cart sprites
++* @param n Buffer position
++* @return Number of available carts
++*/
++int map_cart_avail(struct map_session_data *sd, uint16 skill_id, unsigned char *buf, int n) {
++	int c = 0;
++	if (CartAvailableConfig.size() < 1)
++		return 0;
++	auto data = CartAvailableConfig.find(skill_id);
++	if (data != CartAvailableConfig.end()) {
++		int pcjob = pc_mapid2jobid(sd->status.class_, sd->status.sex);
++		for (auto it : data->second.carts) {
++			if (it.min_level > sd->status.base_level)
++				continue;
++			if (it.job_except.size() > 0) {
++				auto job = std::find(it.job_except.begin(), it.job_except.end(), pcjob);
++				if (job != it.job_except.end()) // Job Exluded
++					continue;
++			}
++			WBUFB(buf, n + c) = (uint8)it.type;
++			c++;
++		}
++	}
++	return c;
++}
++
++/* Check if cart that player requested is available [Cydh]
++* @param sd Player
++* @param skill_id Used Skill ID
++* @param type Cart type
++* @return 0 if success, or number of error
++*/
++int map_cart_check_type(struct map_session_data *sd, uint16 skill_id, uint8 type) {
++	nullpo_retr(1, sd);
++	if (CartAvailableConfig.size() < 1)
++		return 1;
++
++	auto data = CartAvailableConfig.find(skill_id);
++	if (data == CartAvailableConfig.end()) // Invalid Skill
++		return 2;
++
++	auto cart = std::find_if(data->second.carts.begin(), data->second.carts.end(),
++		[&type](const s_cart_config_value &e) { return type == e.type; });
++	if (cart == data->second.carts.end()) // No type found
++		return 3;
++
++	if (cart->min_level > sd->status.base_level) // Not enough level
++		return 4;
++
++	if (cart->job_except.size() > 0) {
++		int pcjob = pc_mapid2jobid(sd->status.class_, sd->status.sex);
++		auto job = std::find(cart->job_except.begin(), cart->job_except.end(), pcjob);
++		if (job != cart->job_except.end()) // Job Exluded
++			return 5;
++	}
++	return 0;
++}
++
++/* Read Cart config file [Cydh]
++*/
++static void map_cart_read_config(void) {
++	YAML::Node config;
++
++	try {
++		config = YAML::LoadFile(cart_conf);
++	}
++	catch (...) {
++		ShowError("map_cart_read_config: Cannot read '" CL_WHITE "%s" CL_RESET "'.\n", cart_conf.c_str());
++		return;
++	}
++
++	if (!config["Capacity"].IsDefined())
++		ShowError("map_cart_read_config: Cannot found 'Capacity' config in '%s'!\n", cart_conf.c_str());
++	else {
++		uint8 count = 0;
++		for (const auto &node : config["Capacity"]) {
++			if (node["Type"].IsDefined() && node["MaxItems"].IsDefined() && node["MaxWeight"].IsDefined()) {
++				struct s_cart_config_capacity data;
++				int type = node["Type"].as<int>();
++				unsigned short max_items = node["MaxItems"].as<unsigned short>();
++				if (max_items > MAX_CART) {
++					ShowError("map_cart_read_config: Defined MaxItems '%d' is higher than MAX_CART %d in '%s'!\n", max_items, MAX_CART, cart_conf.c_str());
++					max_items = MAX_CART;
++				}
++				data.max_items = max_items;
++				data.max_weight = node["MaxWeight"].as<unsigned int>() * 10;
++				CartCapacityConfig.insert({ type, data });
++				count++;
++			}
++		}
++		ShowStatus("Done reading '" CL_WHITE "%d" CL_RESET "' " CL_GREEN "Capacity" CL_RESET " entries in '" CL_WHITE "%s" CL_RESET "'\n", count, cart_conf.c_str());
++	}
++
++	if (!config["ChangeCart"].IsDefined())
++		ShowError("map_cart_read_config: Cannot found 'ChangeCart' config in '%s'!\n", cart_conf.c_str());
++	else {
++		uint8 count = 0;
++		for (const auto &skill : config["ChangeCart"]) {
++			struct s_cart_config_available cartdata;
++			int skill_id = 0;
++			uint8 n = 0;
++
++			if (!skill["Skill"].IsDefined() || !skill["Carts"].IsDefined())
++				continue;
++			if (!(skill_id = skill_name2id(skill["Skill"].as<std::string>().c_str()))) {
++				ShowError("map_cart_read_config: Invalid skill name '%s' in '%s'!\n", skill["Skill"].as<std::string>().c_str(), cart_conf.c_str());
++				continue;
++			}
++
++			for (const auto &node : skill["Carts"]) {
++				struct s_cart_config_value data;
++				int type;
++				if (!node["Type"].IsDefined() || !node["MinLevel"].IsDefined())
++					continue;
++				type = node["Type"].as<int>();
++				if (type < 1 || type > MAX_CARTS) {
++					ShowError("map_cart_read_config: Invalid cart type '%d' (1-%d) in '%s'!\n", type, MAX_CARTS, cart_conf.c_str());
++					continue;
++				}
++				data.type = (uint8)type;
++				data.min_level = node["MinLevel"].as<unsigned short>();
++				if (node["JobExcept"].IsDefined() && node["JobExcept"].IsSequence()) {
++					for (YAML::const_iterator it = node["JobExcept"].begin(); it != node["JobExcept"].end(); ++it) {
++						int jobid = 0;
++						if (script_get_constant(it->as<std::string>().c_str(), &jobid))
++							data.job_except.push_back(jobid);
++					}
++				}
++				cartdata.carts.push_back(data);
++				count++;
++				n++;
++			}
++
++			if (!n)
++				continue;
++			CartAvailableConfig.insert({ skill_id, cartdata });
++		}
++		ShowStatus("Done reading '" CL_WHITE "%d" CL_RESET "' " CL_GREEN "ChangeCart" CL_RESET " entries in '" CL_WHITE "%s" CL_RESET "'\n", count, cart_conf.c_str());
++	}
++}
++
+ #ifdef ADJUST_SKILL_DAMAGE
+ /**
+  * Free all skill damage entries for a map
+@@ -4426,6 +4671,8 @@ void do_final(void)
+ 	do_final_vending();
+ 	do_final_buyingstore();
+ 	do_final_path();
++	CartAvailableConfig.clear();
++	CartCapacityConfig.clear();
+ 
+ 	map_db->destroy(map_db, map_db_final);
+ 
+@@ -4746,6 +4993,7 @@ int do_init(int argc, char *argv[])
+ 	do_init_channel();
+ 	do_init_cashshop();
+ 	do_init_skill();
++	map_cart_read_config();
+ 	do_init_mob();
+ 	do_init_pc();
+ 	do_init_status();
+diff --git a/src/map/map.hpp b/src/map/map.hpp
+index 9eb74f8..834574e 100644
+--- a/src/map/map.hpp
++++ b/src/map/map.hpp
+@@ -5,6 +5,8 @@
+ #define _MAP_HPP_
+ 
+ #include <stdarg.h>
++#include <vector>
++#include <unordered_map>
+ 
+ #include "../common/cbasetypes.h"
+ #include "../common/core.h" // CORE_ST_LAST
+@@ -781,6 +783,24 @@ struct s_map_default {
+ };
+ extern struct s_map_default map_default;
+ 
++/// Cart capacity data [Cydh]
++struct s_cart_config_capacity {
++	unsigned short max_items;
++	unsigned int max_weight;
++};
++
++/// Cart availability single entry [Cydh]
++struct s_cart_config_value {
++	uint8 type;
++	unsigned short min_level;
++	std::vector <int> job_except;
++};
++
++/// Cart availability data by Skill [Cydh]
++struct s_cart_config_available {
++	std::vector <s_cart_config_value> carts;
++};
++
+ /// Type of 'save_settings'
+ enum save_settings_type {
+ 	CHARSAVE_NONE = 0,
+@@ -927,6 +947,14 @@ void map_removemobs(int16 m); // [Wizputer]
+ void map_addmap2db(struct map_data *m);
+ void map_removemapdb(struct map_data *m);
+ 
++bool map_cart_type_is_enabled(void);
++int map_cart_avail(struct map_session_data *sd, uint16 skill_id, unsigned char *buf, int n);
++int map_cart_check_type(struct map_session_data *sd, uint16 skill_id, uint8 type);
++unsigned int map_cart_max_weight2(int type);
++unsigned int map_cart_max_weight(struct map_session_data *sd);
++unsigned short map_cart_max_items2(int type);
++unsigned short map_cart_max_items(struct map_session_data *sd);
++
+ #ifdef ADJUST_SKILL_DAMAGE
+ void map_skill_damage_free(struct map_data *m);
+ void map_skill_damage_add(struct map_data *m, uint16 skill_id, int pc, int mob, int boss, int other, uint8 caster);
+diff --git a/src/map/pc.cpp b/src/map/pc.cpp
+index 20f476d..c3af984 100755
+--- a/src/map/pc.cpp
++++ b/src/map/pc.cpp
+@@ -5143,10 +5143,10 @@ unsigned char pc_cart_additem(struct map_session_data *sd,struct item *item,int
+ 	if( (w = data->weight*amount) + sd->cart_weight > sd->cart_weight_max )
+ 		return 1;
+ 
+-	i = MAX_CART;
++	i = sd->cart_num_max;
+ 	if( itemdb_isstackable2(data) && !item->expire_time )
+ 	{
+-		for (i = 0; i < MAX_CART; i++) {
++		for (i = 0; i < sd->cart_num_max; i++) {
+ 			if (sd->cart.u.items_cart[i].nameid == item->nameid
+ 				&& sd->cart.u.items_cart[i].bound == item->bound
+ 				&& sd->cart.u.items_cart[i].unique_id == item->unique_id
+@@ -5156,7 +5156,7 @@ unsigned char pc_cart_additem(struct map_session_data *sd,struct item *item,int
+ 		}
+ 	}
+ 
+-	if( i < MAX_CART )
++	if( i < sd->cart_num_max)
+ 	{// item already in cart, stack it
+ 		if( amount > MAX_AMOUNT - sd->cart.u.items_cart[i].amount || ( data->stack.cart && amount > data->stack.amount - sd->cart.u.items_cart[i].amount ) )
+ 			return 2; // no slot
+@@ -5166,8 +5166,8 @@ unsigned char pc_cart_additem(struct map_session_data *sd,struct item *item,int
+ 	}
+ 	else
+ 	{// item not stackable or not present, add it
+-		ARR_FIND( 0, MAX_CART, i, sd->cart.u.items_cart[i].nameid == 0 );
+-		if( i == MAX_CART )
++		ARR_FIND( 0, sd->cart_num_max, i, sd->cart.u.items_cart[i].nameid == 0 );
++		if( i == sd->cart_num_max)
+ 			return 2; // no slot
+ 
+ 		memcpy(&sd->cart.u.items_cart[i],item,sizeof(sd->cart.u.items_cart[0]));
+@@ -8955,6 +8955,11 @@ bool pc_setcart(struct map_session_data *sd,int type) {
+ 	if( pc_checkskill(sd,MC_PUSHCART) <= 0 && type != 0 )
+ 		return false;// Push cart is required
+ 
++	if (type && (sd->cart_weight > map_cart_max_weight2(type) || sd->cart_num > map_cart_max_items2(type))) {
++		clif_messagecolor(&sd->bl, color_table[COLOR_RED], "Cannot change cart. Selected cart has fewer capacity", false, SELF);
++		return false;
++	}
++
+ #ifdef NEW_CARTS
+ 
+ 	switch( type ) {
+@@ -11702,6 +11707,7 @@ void pc_scdata_received(struct map_session_data *sd) {
+ 
+ 	if (pc_iscarton(sd)) {
+ 		sd->cart_weight_max = 0; // Force a client refesh
++		sd->cart_num_max = 0; // Force a client refesh
+ 		status_calc_cart_weight(sd, (e_status_calc_weight_opt)(CALCWT_ITEM|CALCWT_MAXBONUS|CALCWT_CARTSTATE));
+ 	}
+ }
+diff --git a/src/map/pc.hpp b/src/map/pc.hpp
+index 74f6626..cd97403 100644
+--- a/src/map/pc.hpp
++++ b/src/map/pc.hpp
+@@ -298,7 +298,9 @@ struct map_session_data {
+ 	struct item_data* inventory_data[MAX_INVENTORY]; // direct pointers to itemdb entries (faster than doing item_id lookups)
+ 	short equip_index[EQI_MAX];
+ 	unsigned int weight,max_weight,add_max_weight;
+-	int cart_weight,cart_num,cart_weight_max;
++	int cart_weight,cart_weight_max;
++	int cart_num, // current item count in cart
++		cart_num_max; // max item count in cart. If cart_num > cart_num_max = no add more item
+ 	int fd;
+ 	unsigned short mapindex;
+ 	unsigned char head_dir; //0: Look forward. 1: Look right, 2: Look left.
+@@ -331,6 +333,7 @@ struct map_session_data {
+ 	bool skillitem_keep_requirement;
+ 	uint16 skill_id_old,skill_lv_old;
+ 	uint16 skill_id_dance,skill_lv_dance;
++	uint16 changecart_skill; ///< Remember last used change cart skill [Cydh]
+ 	short cook_mastery; // range: [0,1999] [Inkfish]
+ 	struct skill_cooldown_entry * scd[MAX_SKILLCOOLDOWN]; // Skill Cooldown
+ 	short cloneskill_idx, ///Stores index of copied skill by Intimidate/Plagiarism
+diff --git a/src/map/skill.cpp b/src/map/skill.cpp
+index b897f7d..9e019e0 100755
+--- a/src/map/skill.cpp
++++ b/src/map/skill.cpp
+@@ -6794,13 +6794,14 @@ int skill_castend_nodamage_id (struct block_list *src, struct block_list *bl, ui
+ 		break;
+ 
+ 	case MC_CHANGECART:
+-		clif_skill_nodamage(src,bl,skill_id,skill_lv,1);
+-		break;
+-
++		if (!map_cart_type_is_enabled()) {
++			clif_skill_nodamage(src, bl, skill_id, skill_lv, 1);
++			break;
++		}
+ 	case MC_CARTDECORATE:
+-		clif_skill_nodamage(src,bl,skill_id,skill_lv,1);
++		clif_skill_nodamage(src, bl, MC_CARTDECORATE, skill_lv, 1);
+ 		if( sd ) {
+-			clif_SelectCart(sd);
++			clif_SelectCart(sd, skill_id);
+ 		}
+ 		break;
+ 
+diff --git a/src/map/status.cpp b/src/map/status.cpp
+index cba0e67..67f0c30 100644
+--- a/src/map/status.cpp
++++ b/src/map/status.cpp
+@@ -3267,7 +3267,7 @@ bool status_calc_weight(struct map_session_data *sd, enum e_status_calc_weight_o
+  */
+ bool status_calc_cart_weight(struct map_session_data *sd, enum e_status_calc_weight_opt flag)
+ {
+-	int b_cart_weight_max, i;
++	int b_cart_weight_max, b_cart_num_max, i;
+ 
+ 	nullpo_retr(false, sd);
+ 
+@@ -3275,7 +3275,9 @@ bool status_calc_cart_weight(struct map_session_data *sd, enum e_status_calc_wei
+ 		return false;
+ 
+ 	b_cart_weight_max = sd->cart_weight_max; // Store cart max weight for later comparison
+-	sd->cart_weight_max = battle_config.max_cart_weight; // Recalculate max weight
++	sd->cart_weight_max = map_cart_max_weight(sd); // Recalculate max weight
++	b_cart_num_max = sd->cart_num_max;
++	sd->cart_num_max = map_cart_max_items(sd);
+ 
+ 	if (flag&CALCWT_ITEM) {
+ 		sd->cart_weight = 0; // Reset current cart weight
+@@ -3294,7 +3296,7 @@ bool status_calc_cart_weight(struct map_session_data *sd, enum e_status_calc_wei
+ 		sd->cart_weight_max += (pc_checkskill(sd, GN_REMODELING_CART) * 5000);
+ 
+ 	// Update the client if the new weight calculations don't match
+-	if (b_cart_weight_max != sd->cart_weight_max)
++	if (b_cart_weight_max != sd->cart_weight_max || b_cart_num_max != sd->cart_num_max)
+ 		clif_updatestatus(sd, SP_CARTINFO);
+ 
+ 	return true;
